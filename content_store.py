@@ -7,47 +7,46 @@ class UCSFContentStore:
         self.ocr_base = "https://download.industrydocuments.ucsf.edu/"
         self.document_frequencies = defaultdict(int)
         self.document_store = {}  # Single source of truth for all document data
-        self.title_hash = set()  # Store normalized titles for fast duplicate checking
+        self.title_hash = defaultdict(lambda: defaultdict(int))
     
-    def normalize_title(self, title: str) -> str:
+    def _normalize_title(self, title: str) -> str:
         """Create a normalized version of the title for comparison"""
-        if not title:
-            return ""
         # Remove punctuation, convert to lowercase, and remove extra whitespace
         normalized = ''.join(c.lower() for c in title if c.isalnum() or c.isspace())
         return ' '.join(normalized.split())
 
-    
-    def cache(self, doc: Dict[str, Any]) -> bool:
-        """Add document to store if it's not a duplicate. Return True if added."""
-        doc_id = doc['id']
-        title = doc.get('ti', '')
-        
-        # Skip if exact ID already exists
-        if doc_id in self.document_store:
-            return doc
-            
-        # Get normalized title
-        norm_title = self._normalize_title(title)
-        if not norm_title:  # If no title, just add the doc
+    def _count_document(self, doc_id, title):
+        """Track document appearances, allowing content with same titles but different doc IDs"""
+        self.title_hash[title][doc_id] += 1
+
+    def _cache(self, doc, doc_id, title, search_strategy):
+        """Add document to store if entirely new"""
+        if title not in self.title_hash and doc_id not in self.document_store:
             self.document_store[doc_id] = {
-                'metadata': doc,
-                'ocr_text': None
+                    'search_strategy': search_strategy,
+                    'id': doc_id,
+                    'title': title,
+                    'type': doc.get('dt', 'No type'),
+                    'bates': doc.get('bn', 'No bates number'),
+                    'date': {doc.get('dd', 'No date')},
+                    'ocr_text': None
             }
-            return doc
-            
-        # Check for duplicate title
-        if norm_title in self.title_hash:
-            print(f"Skipping document {doc_id} due to seen title")
-            return doc
-            
-        # Add document and its normalized title
-        self.title_hash.add(norm_title)
-        self.document_store[doc_id] = {
-            'metadata': doc,
-            'ocr_text': None
-        }
-        return doc
+        return
+
+    def process_docs(self, docs, search_strategy):
+        """Caches documents and updates frequencies of seen documents for results of a search strategy"""
+        for doc in docs:
+            if (self.is_public_doc(doc)):
+                doc_id = doc['id']
+                title = self._normalize_title(doc.get('ti', ''))
+                self._cache(doc, doc_id, title, search_strategy)
+                self._count_document(doc_id, title)
+        self._update_missing_ocr()
+    
+    def _update_missing_ocr(self):
+        [self.document_store[doc_id].__setitem__('ocr_text', self.get_ocr_text(doc_id)) 
+        for doc_id, data in self.document_store.items() 
+        if data['ocr_text'] is None]
 
     def is_public_doc(self, doc):
         """Check if document is public and unrestricted"""
@@ -67,26 +66,30 @@ class UCSFContentStore:
             print(f"Error getting OCR text for {doc_id}: {e}")
             return ""
 
-    def execute_search(self, strategy, max_results: int = 50):
-        """Execute a single search strategy"""
-        params = {
-            'q': strategy['search_terms'],
-            'fq': ['availability:public'],
-            'wt': 'json',
-            'rows': str(max_results),
-            'sort': 'score desc',
-            'fl': 'id,au,ti,bn,dd,dt,availability,pg,attach,access,artifact'
-        }
-        
-        # Add strategy filters
-        for field, value in strategy.get('filters', {}).items():
-            params['fq'].append(f'{field}:{value}')
+    def execute_searches(self, strategies, max_results: int = 5):
+        """Execute search strategies and return new documents"""
+        for strategy in strategies:
+            print(f"\nExecuting strategy: {strategy.get('search_terms')}")
+            
+            params = {
+                'q': strategy['search_terms'],
+                'fq': ['availability:public'],
+                'wt': 'json',
+                'rows': str(max_results),
+                'sort': 'score desc',
+                'fl': 'id,au,ti,bn,dd,dt,availability,pg,attach,access,artifact'
+            }
+            
+            # Add strategy filters
+            for field, value in strategy.get('filters', {}).items():
+                params['fq'].append(f'{field}:{value}')
 
-        try:
-            response = requests.get(self.base_url, params=params, verify=False)
-            if response.status_code == 200:
-                return [self.cache(doc) for doc in response.json()['response']['docs'] 
-                       if self.is_public_doc(doc)]
-        except Exception as e:
-            print(f"Error executing search: {e}")
-        return []
+            try:
+                response = requests.get(self.base_url, params=params, verify=False)
+                if response.status_code == 200:
+                    docs = response.json()['response']['docs']
+                    self.process_docs(docs, strategy)
+            except Exception as e:
+                print(f"Error executing search: {e}")
+        
+        return self.document_store
