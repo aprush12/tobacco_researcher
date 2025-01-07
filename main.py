@@ -1,4 +1,3 @@
-# main.py references tobacco_analyzer.py (module __init__)
 from search_strategies import SearchStrategies
 from analyzer import Analyzer
 import os
@@ -7,8 +6,8 @@ import sys
 import google.generativeai as genai
 from prompts import SEARCH_V1
 from content_store import UCSFContentStore
-
-
+from summarize import Summarizer
+from prompt_manager import PromptManager
 GEMINI = 'gemini-1.5-flash'
 
 
@@ -20,8 +19,9 @@ query = "how did philip morris use non profits to their benefit" # input("Enter 
 
 strategies = SearchStrategies(model, query).generate_search_strategies(SEARCH_V1.format(uq=query))
 content_store = UCSFContentStore()
+prompt_manager = PromptManager()
+summarizer = Summarizer(model, prompt_manager)
+analyzer = Analyzer(model, strategies, content_store, prompt_manager)
 
-analyzer = Analyzer(model, strategies, content_store)
-analysis, docs = analyzer.analyze_topic(query)
-top_summaries = analyzer.summarize_top_documents(query, docs, analysis, 3)
-print(top_summaries)
+scores, docs = analyzer.analyze_topic(query, 2)
+summarizer.summarize_top_documents(query, docs, scores, 3)

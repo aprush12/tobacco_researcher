@@ -8,7 +8,8 @@ class UCSFContentStore:
         self.document_frequencies = defaultdict(int)
         self.document_store = {}  # Single source of truth for all document data
         self.title_hash = defaultdict(lambda: defaultdict(int))
-    
+        self.max_chars = 99300
+
     def _normalize_title(self, title: str) -> str:
         """Create a normalized version of the title for comparison"""
         # Remove punctuation, convert to lowercase, and remove extra whitespace
@@ -44,7 +45,7 @@ class UCSFContentStore:
         self._update_missing_ocr()
     
     def _update_missing_ocr(self):
-        [self.document_store[doc_id].__setitem__('ocr_text', self.get_ocr_text(doc_id)) 
+        [self.document_store[doc_id].__setitem__('ocr_text', self.get_ocr_text(doc_id, self.max_chars)) 
         for doc_id, data in self.document_store.items() 
         if data['ocr_text'] is None]
 
@@ -53,20 +54,20 @@ class UCSFContentStore:
         availability = doc.get('availability', [])
         return "public" in availability or "no restrictions" in availability
 
-    def get_ocr_text(self, doc_id: str) -> str:
+    def get_ocr_text(self, doc_id: str, max_chars) -> str:
         """Gets OCR text for a document"""
         path_segment = '/'.join(list(doc_id[:4].lower()))
         url = f"{self.ocr_base}{path_segment}/{doc_id.lower()}/{doc_id.lower()}.ocr"
         try:
             response = requests.get(url, verify=False, timeout=10)
             if response.status_code == 200:
-                return response.text
+                return response.text[:max_chars]
             return ""
         except Exception as e:
             print(f"Error getting OCR text for {doc_id}: {e}")
             return ""
 
-    def execute_searches(self, strategies, max_results: int = 5):
+    def execute_searches(self, strategies, max_results: int = 2):
         """Execute search strategies and return new documents"""
         for strategy in strategies:
             print(f"\nExecuting strategy: {strategy.get('search_terms')}")
