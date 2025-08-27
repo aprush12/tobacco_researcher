@@ -1,0 +1,7 @@
+# Core runtime dependencies
+google-generativeai
+python-dotenv
+requests
+
+# Optional: for working with the notebook locally
+# jupyter

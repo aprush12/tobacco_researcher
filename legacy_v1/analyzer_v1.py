@@ -14,12 +14,12 @@ class Analyzer:
         self.content_store = content_store
         self.prompt_manager = prompt_manager
 
-    def analyze_topic(self, user_query, num_results_per_search) -> Dict[str, Any]:
+    def analyze_topic(self, user_query, num_results_per_search, additional_fqs=None) -> Dict[str, Any]:
         """Main analysis pipeline"""
         print(f"\nStarting analysis for: {user_query}")
-        cached_docs = self.content_store.execute_searches(self.strategies, num_results_per_search)
-        self.analyze_documents_in_batches(cached_docs, user_query)
-        return self.analyze_documents_in_batches(cached_docs, user_query), cached_docs
+        cached_docs = self.content_store.execute_searches(self.strategies, num_results_per_search, additional_fqs)
+        results = self.analyze_documents_in_batches(cached_docs, user_query)
+        return results, cached_docs
 
     def analyze_documents_in_batches(self, docs: Dict[str, Any], user_query: str, BATCH_SIZE=5):
         """Analyze document(s) in batches with fallback for problematic batches"""
@@ -70,4 +70,4 @@ class Analyzer:
         print(f"\nScores for batch:")
         for doc_id, details in analysis.items():
             print(f"Document {doc_id}: Score {details['score']}/10")
-    
+
