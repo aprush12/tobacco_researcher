@@ -76,8 +76,9 @@ def _multi_select(options: list[str], title: str) -> list[str] | None:
             print("Invalid selection; use numbers in range or Enter.")
 
 
-def build_filters_interactively(default_date: str = "[1980 TO 1990]") -> dict:
-    selected: dict = {"date": [default_date]}
+def build_filters_interactively(default_date: str | None = None) -> dict:
+    # Start with no default date selection unless provided explicitly
+    selected: dict = {"date": [default_date]} if default_date else {}
     while True:
         print("\nPress Enter to run search, or choose a filter to add:")
         print(f"Currently selected: {selected}")
@@ -129,16 +130,73 @@ def build_filters_interactively(default_date: str = "[1980 TO 1990]") -> dict:
                 selected["brand"] = vals
 
 
+def _normalize_year(s: str) -> str | None:
+    s = s.strip()
+    return s if s.isdigit() and len(s) == 4 else None
+
+
+def _normalize_yyyymmdd(s: str) -> str | None:
+    s = s.strip()
+    return s if s.isdigit() and len(s) == 8 else None
+
+
+def _iso_datetime_from_year(y: str, end: bool) -> str:
+    return f"{y}-12-31T00:00:00Z" if end else f"{y}-01-01T00:00:00Z"
+
+
+def _iso_datetime_from_yyyymmdd(d: str) -> str:
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}T00:00:00Z"
+
+
+def _normalize_date_range(rng: str) -> str | None:
+    """
+    Accepts inputs like:
+    - "[1980 TO 1990]" or "1980 TO 1990"
+    - "[19800101 TO 19901231]" or "19800101 TO 19901231"
+    - Already ISO datetimes inside optional brackets
+    Returns a Solr range for documentdateiso: "[YYYY-MM-DDTHH:MM:SSZ TO YYYY-MM-DDTHH:MM:SSZ]"
+    """
+    if not isinstance(rng, str) or not rng.strip():
+        return None
+    s = rng.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1].strip()
+    if 'TO' not in s:
+        return None
+    start, end = [p.strip() for p in s.split('TO', 1)]
+
+    # Year-only
+    ys, ye = _normalize_year(start), _normalize_year(end)
+    if ys and ye:
+        return f"[{_iso_datetime_from_year(ys, False)} TO {_iso_datetime_from_year(ye, True)}]"
+
+    # yyyymmdd
+    ds, de = _normalize_yyyymmdd(start), _normalize_yyyymmdd(end)
+    if ds and de:
+        return f"[{_iso_datetime_from_yyyymmdd(ds)} TO {_iso_datetime_from_yyyymmdd(de)}]"
+
+    # If looks like ISO already (has '-' and 'T'), just ensure brackets
+    if ('-' in start and 'T' in start) and ('-' in end and 'T' in end):
+        return f"[{start} TO {end}]"
+    return None
+
+
 def build_solr_fqs(filters: dict) -> list[str]:
     fqs: list[str] = []
     # Date ranges
     dates = filters.get("date") or []
     if isinstance(dates, list) and dates:
-        if len(dates) == 1:
-            fqs.append(f"dd:{dates[0]}")
-        else:
-            or_expr = " OR ".join([f"dd:{rng}" for rng in dates])
-            fqs.append(f"({or_expr})")
+        # Normalize to documentdateiso ranges
+        normed: list[str] = []
+        for rng in dates:
+            nr = _normalize_date_range(rng)
+            if nr:
+                normed.append(f"documentdateiso:{nr}")
+        if normed:
+            if len(normed) == 1:
+                fqs.append(normed[0])
+            else:
+                fqs.append(f"({' OR '.join(normed)})")
     # Types
     types = filters.get("type") or []
     if isinstance(types, list) and types:
@@ -170,4 +228,3 @@ def build_solr_fqs(filters: dict) -> list[str]:
             or_expr = " OR ".join([f"brand:{q(b)}" for b in brands])
             fqs.append(f"({or_expr})")
     return fqs
-

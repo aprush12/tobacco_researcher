@@ -12,6 +12,9 @@ Research tool to rapidly identify and summarize documents relevant to a given re
 - Python: project uses a virtualenv in `myenv/`.
 - API key: copy `.env.example` to `.env` and set `GEMINI_API_KEY=...`.
 - Dependencies: install from `requirements.txt` into the venv if needed.
+ - Optional endpoints (for IDL updates): set these in `.env` if needed
+   - `SOLR_BASE_URL=https://metadata.idl.ucsf.edu/solr/ltdl3/query`
+   - `OCR_BASE=https://download.industrydocuments.ucsf.edu/`
 
 Example:
 ```
@@ -24,7 +27,7 @@ Example:
 ```
 Flow:
 - Enter research question (default: `youth women marketing tobacco`).
-- Add filters via menu; default date `[1980 TO 1990]` is preselected; press Enter to run.
+- Add filters via menu (no default date is preselected); press Enter to run.
 - Choose parameters when prompted:
   - Rows per strategy (default 10)
   - How many to display (default 5)
@@ -40,7 +43,7 @@ Flow:
 
 ## How Filters Apply
 - Availability: always enforced as `fq=availability:public`.
-- Date: builds `fq` on the `dd` field; multi‑select creates an OR group, e.g. `(dd:[1980 TO 1990] OR dd:[1990 TO 2000])`.
+- Date: builds `fq` on `documentdateiso` with ISO datetimes; inputs like `[1980 TO 1990]` are normalized to `documentdateiso:[1980-01-01T00:00:00Z TO 1990-12-31T00:00:00Z]`. Multi‑select creates an OR group.
 - Document type: builds `fq` on `dt`, quoting values; multi‑select ORs types.
 - Collection: builds `fq` on `collection`, quoted; multi‑select ORs collections.
 - Brand: builds `fq` on `brand`, quoted; multi‑select ORs brands.

@@ -26,7 +26,7 @@ def main():
     query = input("Enter your research question (press Enter for default): ").strip() or "youth women marketing tobacco"
 
     strategies = SearchStrategies(model, query).generate_search_strategies(
-        f"Given this research question about tobacco documents: \"{query}\"\nGenerate 3 different search strategies. Each strategy should contain 2-4 key terms that would help find relevant documents.\nReturn your response in this exact JSON format with no additional text:\n{{\n    \"strategies\": [\n        {{\n            \"search_terms\": \"term1 term2\",            \n            \"rationale\": \"why this might work\"\n        }}\n    ]\n}}"
+        f"Given this research question about tobacco documents: \"{query}\"\nGenerate 3 different search strategies to find industry documents that reveal intent of deception; however you cannot explicitly search for deception since Big Tobacco wouldn't call themselves deceptive. Each strategy should have 2-4 key terms that would help find relevant documents (not in quotes).\nReturn your response in this exact JSON format with no additional text:\n{{\n    \"strategies\": [\n        {{\n            \"search_terms\": \"term1 term2\",            \n            \"rationale\": \"why this might work\"\n        }}\n    ]\n}}"
     )
 
     # Interactive filters

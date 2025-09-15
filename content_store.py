@@ -1,10 +1,20 @@
+import os
 import requests
 from collections import defaultdict
 
 class UCSFContentStore:
     def __init__(self):
-        self.base_url = "https://solr.idl.ucsf.edu/solr/ltdl3/select"
-        self.ocr_base = "https://download.industrydocuments.ucsf.edu/"
+        # Allow overriding endpoints via environment for compatibility with IDL updates
+        self.base_url = os.getenv(
+            "SOLR_BASE_URL",
+            # Default to the public metadata endpoint per updated IDL docs
+            "https://metadata.idl.ucsf.edu/solr/ltdl3/query",
+        )
+        self.ocr_base = os.getenv(
+            "OCR_BASE",
+            # Keep existing default OCR host unless overridden
+            "https://download.industrydocuments.ucsf.edu/",
+        )
         self.document_frequencies = defaultdict(int)
         self.document_store = {}  # Single source of truth for all document data
         self.title_hash = defaultdict(lambda: defaultdict(int))
@@ -48,13 +58,19 @@ class UCSFContentStore:
                 return
 
         safe_title = title if title else '(untitled)'
+        # Field compatibility: prefer new names, fallback to legacy short names
+        get = lambda *keys: next((doc.get(k) for k in keys if k in doc), None)
+        doc_type = get('type', 'dt') or 'No type'
+        bates = get('bates', 'bn') or 'No bates number'
+        # Prefer ISO date; fallback to legacy 'dd'
+        date_val = get('documentdateiso', 'dd') or 'No date'
         self.document_store[doc_id] = {
             'search_strategy': search_strategy,
             'id': doc_id,
             'title': safe_title,
-            'type': doc.get('dt', 'No type'),
-            'bates': doc.get('bn', 'No bates number'),
-            'date': {doc.get('dd', 'No date')},
+            'type': doc_type,
+            'bates': bates,
+            'date': {date_val},
             'ocr_text': None
         }
         return
@@ -63,7 +79,9 @@ class UCSFContentStore:
         """Caches documents and updates frequencies of seen documents for results of a search strategy"""
         for doc in docs:
             doc_id = doc['id']
-            title = self._normalize_title(doc.get('ti', ''))
+            # Prefer full field names if present, fallback to short legacy names
+            raw_title = doc.get('title') or doc.get('ti', '')
+            title = self._normalize_title(raw_title)
             self._cache(doc, doc_id, title, search_strategy)
             self._count_document(doc_id, title)
         self._update_missing_ocr()
@@ -97,7 +115,19 @@ class UCSFContentStore:
                 'wt': 'json',
                 'rows': str(max_results),
                 'sort': 'score desc',
-                'fl': 'id,au,ti,bn,dd,dt,availability,pg,attach,access,artifact,collection,brand,score'
+                # Request both legacy short names and new full names for stability
+                'fl': ','.join([
+                    'id',
+                    # title/author/type
+                    'title','author','type','ti','au','dt',
+                    # date fields
+                    'documentdateiso','dd',
+                    # bates/pages
+                    'bates','pages','bn','pg',
+                    # other fields used downstream
+                    'availability','attach','access','artifact','collection','brand',
+                    'score',
+                ])
             }
             if additional_fqs:
                 params['fq'].extend(additional_fqs)
@@ -109,7 +139,7 @@ class UCSFContentStore:
             try:
                 response = requests.get(self.base_url, params=params, verify=False)
                 if response.status_code == 200:
-                    docs = response.json()['response']['docs']
+                    docs = response.json().get('response', {}).get('docs', [])
                     self.process_docs(docs, strategy)
             except Exception as e:
                 print(f"Error executing search: {e}")
