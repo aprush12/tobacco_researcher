@@ -15,6 +15,8 @@ Research tool to rapidly identify and summarize documents relevant to a given re
  - Optional endpoints (for IDL updates): set these in `.env` if needed
    - `SOLR_BASE_URL=https://metadata.idl.ucsf.edu/solr/ltdl3/query`
    - `OCR_BASE=https://download.industrydocuments.ucsf.edu/`
+  - Optional paging:
+    - `USE_CURSOR_MARK=true` to enable Solr cursorMark paging (requires a stable sort like `score desc, id asc`). Defaults to false.
 
 Example:
 ```
@@ -32,6 +34,11 @@ Flow:
   - Rows per strategy (default 10)
   - How many to display (default 5)
   - How many to summarize (default 3)
+  
+  Note: The UCSF Solr API returns up to 100 records per request regardless of the
+  `rows` parameter. The pipeline now pages in 100‑doc chunks and then trims to
+  your requested per‑strategy count. If you request more than 100, it will fetch
+  multiple pages using `start` (or `cursorMark` when `USE_CURSOR_MARK=true`) until it reaches your requested count.
 - Under the hood:
   - Generates multiple search strategies for your query (LLM) — search terms only.
   - Runs Solr for each strategy with your selected filters.

@@ -2,6 +2,9 @@ import os
 import requests
 from collections import defaultdict
 
+# Solr server enforces 100 docs per request; use paging via `start`.
+SERVER_PAGE_SIZE = 100
+
 class UCSFContentStore:
     def __init__(self):
         # Allow overriding endpoints via environment for compatibility with IDL updates
@@ -19,6 +22,10 @@ class UCSFContentStore:
         self.document_store = {}  # Single source of truth for all document data
         self.title_hash = defaultdict(lambda: defaultdict(int))
         self.max_chars = 99300
+        # Optional: enable cursorMark paging via env var
+        self.use_cursor_mark = (os.getenv("USE_CURSOR_MARK", "false").strip().lower() in {"1", "true", "yes", "y"})
+        # Optional: skip OCR fetch (tests / faster runs)
+        self.skip_ocr = (os.getenv("SKIP_OCR", "false").strip().lower() in {"1", "true", "yes", "y"})
 
     def _normalize_title(self, title: str) -> str:
         """Create a normalized version of the title for comparison"""
@@ -87,9 +94,14 @@ class UCSFContentStore:
         self._update_missing_ocr()
     
     def _update_missing_ocr(self):
-        [self.document_store[doc_id].__setitem__('ocr_text', self.get_ocr_text(doc_id, self.max_chars)) 
-        for doc_id, data in self.document_store.items() 
-        if data['ocr_text'] is None]
+        if self.skip_ocr:
+            [self.document_store[doc_id].__setitem__('ocr_text', '')
+             for doc_id, data in self.document_store.items()
+             if data['ocr_text'] is None]
+        else:
+            [self.document_store[doc_id].__setitem__('ocr_text', self.get_ocr_text(doc_id, self.max_chars)) 
+             for doc_id, data in self.document_store.items() 
+             if data['ocr_text'] is None]
 
     def get_ocr_text(self, doc_id: str, max_chars) -> str:
         """Gets OCR text for a document"""
@@ -104,17 +116,24 @@ class UCSFContentStore:
             print(f"Error getting OCR text for {doc_id}: {e}")
             return ""
 
-    def execute_searches(self, strategies, max_results: int = 2, additional_fqs=None):
-        """Execute search strategies and return new documents. additional_fqs extends fq list."""
+    def execute_searches(self, strategies, max_results: int = 2, additional_fqs=None, use_cursor: bool | None = None):
+        """Execute search strategies and return new documents.
+        The upstream Solr endpoint returns up to 100 records per request regardless of `rows`.
+        We page in SERVER_PAGE_SIZE chunks using `start`, then trim to `max_results` per strategy.
+        """
+        if use_cursor is None:
+            use_cursor = self.use_cursor_mark
         for strategy in strategies:
             print(f"\nExecuting strategy: {strategy.get('search_terms')}")
-            
-            params = {
+
+            # Base params (rows fixed to server page size; we'll trim client-side)
+            base_params = {
                 'q': strategy['search_terms'],
                 'fq': ['availability:public'],
                 'wt': 'json',
-                'rows': str(max_results),
-                'sort': 'score desc',
+                'rows': str(SERVER_PAGE_SIZE),
+                # For cursorMark, add a unique tiebreaker. Many Solr setups allow 'score desc, id asc'.
+                'sort': 'score desc, id asc' if use_cursor else 'score desc',
                 # Request both legacy short names and new full names for stability
                 'fl': ','.join([
                     'id',
@@ -130,18 +149,49 @@ class UCSFContentStore:
                 ])
             }
             if additional_fqs:
-                params['fq'].extend(additional_fqs)
-            
+                base_params['fq'].extend(additional_fqs)
+
             # Add strategy filters
             for field, value in strategy.get('filters', {}).items():
-                params['fq'].append(f'{field}:{value}')
+                base_params['fq'].append(f'{field}:{value}')
 
+            # Page until we collect at least max_results, then trim
+            collected = []
             try:
-                response = requests.get(self.base_url, params=params, verify=False)
-                if response.status_code == 200:
-                    docs = response.json().get('response', {}).get('docs', [])
-                    self.process_docs(docs, strategy)
+                if use_cursor:
+                    cursor = '*'
+                    while len(collected) < max_results:
+                        params = dict(base_params)
+                        params['cursorMark'] = cursor
+                        response = requests.get(self.base_url, params=params, verify=False)
+                        if response.status_code != 200:
+                            break
+                        payload = response.json()
+                        docs = payload.get('response', {}).get('docs', [])
+                        if not docs:
+                            break
+                        collected.extend(docs)
+                        next_cursor = payload.get('nextCursorMark')
+                        if not next_cursor or next_cursor == cursor:
+                            break
+                        cursor = next_cursor
+                else:
+                    start = 0
+                    while len(collected) < max_results:
+                        params = dict(base_params)
+                        params['start'] = str(start)
+                        response = requests.get(self.base_url, params=params, verify=False)
+                        if response.status_code != 200:
+                            break
+                        docs = response.json().get('response', {}).get('docs', [])
+                        if not docs:
+                            break
+                        collected.extend(docs)
+                        # Advance page
+                        start += SERVER_PAGE_SIZE
+                # Process only up to max_results
+                self.process_docs(collected[:max_results], search_strategy=strategy)
             except Exception as e:
                 print(f"Error executing search: {e}")
-        
+
         return self.document_store
